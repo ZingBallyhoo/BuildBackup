@@ -1,0 +1,3 @@
+[submodule "Ribbit.NET"]
+	path = Ribbit.NET
+	url = https://github.com/wowdev/Ribbit.NET

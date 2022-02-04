@@ -969,14 +969,18 @@ namespace BuildBackup
                     {
                         Console.Write("Fetching and saving archive sizes..");
 
+                        ulong totalSize = 0;
+
                         for (short i = 0; i < cdnConfig.archives.Length; i++)
                         {
                             var archive = cdnConfig.archives[i];
-                            if (!archiveSizes.ContainsKey(archive))
+                            if (!archiveSizes.TryGetValue(archive, out var remoteFileSize))
                             {
-                                var remoteFileSize = await cdn.GetRemoteFileSize(cdns.entries[0].path + "/data/" + archive[0] + archive[1] + "/" + archive[2] + archive[3] + "/" + archive);
+                                remoteFileSize = await cdn.GetRemoteFileSize(cdns.entries[0].path + "/data/" + archive[0] + archive[1] + "/" + archive[2] + archive[3] + "/" + archive);
                                 archiveSizes.Add(archive, remoteFileSize);
                             }
+                            
+                            totalSize += remoteFileSize;
                         }
 
                         var archiveSizesLines = new List<string>();
@@ -987,7 +991,7 @@ namespace BuildBackup
 
                         await File.WriteAllLinesAsync("archiveSizes.txt", archiveSizesLines);
 
-                        Console.WriteLine("..done");
+                        Console.WriteLine($"..done. total size: {totalSize}");
 
                         Console.Write("Downloading " + cdnConfig.archives.Count() + " archives..");
 
