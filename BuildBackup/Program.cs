@@ -7,6 +7,7 @@ using System.Net.Http;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Humanizer.Bytes;
 
 namespace BuildBackup
 {
@@ -73,10 +74,10 @@ namespace BuildBackup
 
             backupPrograms = SettingsManager.backupProducts;
 
-            var finishedCDNConfigs = new List<string>();
-            var finishedEncodings = new List<string>();
+            var finishedCDNConfigs = new HashSet<string>();
+            var finishedEncodings = new HashSet<string>();
 
-            var downloadThrottler = new SemaphoreSlim(initialCount: 10);
+            var downloadThrottler = new SemaphoreSlim(initialCount: 100);
 
             foreach (string program in checkPrograms)
             {
@@ -134,17 +135,17 @@ namespace BuildBackup
 
                 if (overrideVersions && !string.IsNullOrEmpty(overrideBuildconfig))
                 {
-                    buildConfig = GetBuildConfig(cdns.entries[0].path + "/", overrideBuildconfig);
+                    buildConfig = GetBuildConfig(cdns.entries[0].path, overrideBuildconfig);
                 }
                 else
                 {
-                    buildConfig = GetBuildConfig(cdns.entries[0].path + "/", versions.entries[0].buildConfig);
+                    buildConfig = GetBuildConfig(cdns.entries[0].path, versions.entries[0].buildConfig);
                 }
 
                 // Retrieve all buildconfigs
                 for (var i = 0; i < versions.entries.Count(); i++)
                 {
-                    GetBuildConfig(cdns.entries[0].path + "/", versions.entries[i].buildConfig);
+                    GetBuildConfig(cdns.entries[0].path, versions.entries[i].buildConfig);
                 }
 
                 if (string.IsNullOrWhiteSpace(buildConfig.buildName))
@@ -155,11 +156,11 @@ namespace BuildBackup
 
                 if (overrideVersions && !string.IsNullOrEmpty(overrideCDNconfig))
                 {
-                    cdnConfig = GetCDNconfig(cdns.entries[0].path + "/", overrideCDNconfig);
+                    cdnConfig = GetCDNconfig(cdns.entries[0].path, overrideCDNconfig);
                 }
                 else
                 {
-                    cdnConfig = GetCDNconfig(cdns.entries[0].path + "/", versions.entries[0].cdnConfig);
+                    cdnConfig = GetCDNconfig(cdns.entries[0].path, versions.entries[0].cdnConfig);
                 }
 
                 if (cdnConfig.builds != null)
@@ -206,7 +207,7 @@ namespace BuildBackup
                 {
                     Console.WriteLine("CDN config " + versions.entries[0].cdnConfig + " has not been loaded yet, loading..");
                     Console.Write("Loading " + cdnConfig.archives.Count() + " indexes..");
-                    GetIndexes(cdns.entries[0].path + "/", cdnConfig.archives);
+                    GetIndexes(cdns.entries[0].path, cdnConfig.archives);
                     Console.Write("..done\n");
 
                     if (fullDownload)
@@ -285,11 +286,11 @@ namespace BuildBackup
                 {
                     if (buildConfig.encodingSize == null || buildConfig.encodingSize.Count() < 2)
                     {
-                        encoding = await GetEncoding(cdns.entries[0].path + "/", buildConfig.encoding[1], 0);
+                        encoding = await GetEncoding(cdns.entries[0].path, buildConfig.encoding[1], 0);
                     }
                     else
                     {
-                        encoding = await GetEncoding(cdns.entries[0].path + "/", buildConfig.encoding[1], int.Parse(buildConfig.encodingSize[1]));
+                        encoding = await GetEncoding(cdns.entries[0].path, buildConfig.encoding[1], int.Parse(buildConfig.encodingSize[1]));
                     }
                 }
                 catch (Exception e)
@@ -321,19 +322,20 @@ namespace BuildBackup
                     if (entry.cKey == buildConfig.root.ToUpper()) { rootKey = entry.eKeys[0].ToLower(); }
                     if (downloadKey == "" && entry.cKey == buildConfig.download[0].ToUpper()) { downloadKey = entry.eKeys[0].ToLower(); }
                     if (installKey == "" && entry.cKey == buildConfig.install[0].ToUpper()) { installKey = entry.eKeys[0].ToLower(); }
-                    if (!hashes.ContainsKey(entry.eKeys[0])) { hashes.Add(entry.eKeys[0], entry.cKey); }
+                    
+                    hashes.TryAdd(entry.eKeys[0], entry.cKey);
                 }
 
                 Console.Write("..done\n");
 
                 if (true)
                 {
-                    Console.Write("Loading root..");
-                    if (rootKey == "") { Console.WriteLine("Unable to find root key in encoding!"); } else { root = GetRoot(cdns.entries[0].path + "/", rootKey, false); }
-                    Console.Write("..done\n");
+                    //Console.Write("Loading root..");
+                    //if (rootKey == "") { Console.WriteLine("Unable to find root key in encoding!"); } else { root = GetRoot(cdns.entries[0].path + "/", rootKey, false); }
+                    //Console.Write("..done\n");
 
                     Console.Write("Loading download..");
-                    if (downloadKey == "") { Console.WriteLine("Unable to find download key in encoding!"); } else { download = GetDownload(cdns.entries[0].path + "/", downloadKey, false); }
+                    if (downloadKey == "") { Console.WriteLine("Unable to find download key in encoding!"); } else { download = GetDownload(cdns.entries[0].path, downloadKey, false); }
                     Console.Write("..done\n");
 
                     Console.Write("Loading install..");
@@ -341,7 +343,7 @@ namespace BuildBackup
 
                     try
                     {
-                        if (installKey == "") { Console.WriteLine("Unable to find install key in encoding!"); } else { install = GetInstall(cdns.entries[0].path + "/", installKey, false); }
+                        if (installKey == "") { Console.WriteLine("Unable to find install key in encoding!"); } else { install = GetInstall(cdns.entries[0].path, installKey, false); }
 
                     }
                     catch (Exception e)
@@ -464,7 +466,7 @@ namespace BuildBackup
                         Console.Write("..done\n");
 
                         Console.Write("Downloading " + cdnConfig.patchArchives.Count() + " patch archive indexes..");
-                        GetPatchIndexes(cdns.entries[0].path + "/", cdnConfig.patchArchives);
+                        GetPatchIndexes(cdns.entries[0].path, cdnConfig.patchArchives);
                         Console.Write("..done\n");
                     }
 
@@ -544,75 +546,18 @@ namespace BuildBackup
 
                 GC.Collect();
             }
-        }
 
-        private static byte[] RetrieveFileBytes(string target, bool raw = false, string cdndir = "tpr/wow", bool tryUnarchived = false)
-        {
-            var unarchivedName = Path.Combine(cdn.cacheDir, cdndir, "data", target[0] + "" + target[1], target[2] + "" + target[3], target);
-
-            if (File.Exists(unarchivedName))
+            ulong sizeSum = 0;
+            await using var outputFile = new StreamWriter("allUrls.txt");
+            foreach (var url in cdn.m_allUrls)
             {
-                if (!raw)
-                {
-                    return BLTE.Parse(File.ReadAllBytes(unarchivedName));
-                }
-                else
-                {
-                    return File.ReadAllBytes(unarchivedName);
-                }
-            }
-            else
-            {
-                if (tryUnarchived)
-                {
-                    try
-                    {
-                        var file = cdn.Get(cdndir + "/" + "data" + "/" + target[0] + target[1] + "/" + target[2] + target[3] + "/" + target, true, false, 0, true).Result;
-                        return BLTE.Parse(file);
-                    }
-                    catch (Exception e)
-                    {
-                        Console.WriteLine("Warn: Unable to retrieve file as unarchived from CDN: " + e.Message);
-                    }
-                }
+                //if (url.Key.Contains("/patch/")) continue;
+                
+                sizeSum += url.Value;
+                await outputFile.WriteLineAsync($"{url.Key} {ByteSize.FromBytes(url.Value)}");
             }
 
-            if (!indexDictionary.TryGetValue(target.ToUpper(), out IndexEntry entry))
-            {
-                throw new Exception("Unable to find file in archives. File is not available!?");
-            }
-            else
-            {
-                var index = cdnConfig.archives[entry.index];
-
-                var archiveName = Path.Combine(cdn.cacheDir, cdndir, "data", index[0] + "" + index[1], index[2] + "" + index[3], index);
-                if (!File.Exists(archiveName))
-                {
-                    throw new FileNotFoundException("Unable to find archive " + index + " on disk!");
-                }
-
-                using (BinaryReader bin = new BinaryReader(File.Open(archiveName, FileMode.Open, FileAccess.Read)))
-                {
-                    bin.BaseStream.Position = entry.offset;
-                    try
-                    {
-                        if (!raw)
-                        {
-                            return BLTE.Parse(bin.ReadBytes((int)entry.size));
-                        }
-                        else
-                        {
-                            return bin.ReadBytes((int)entry.size);
-                        }
-                    }
-                    catch (Exception e)
-                    {
-                        Console.WriteLine(e.Message);
-                    }
-                }
-            }
-
-            return new byte[0];
+            Console.Out.WriteLine($"total size: {ByteSize.FromBytes(sizeSum)}");
         }
 
         private static CDNConfigFile GetCDNconfig(string url, string hash)

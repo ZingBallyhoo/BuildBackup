@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Net.Http;
@@ -11,6 +12,8 @@ namespace BuildBackup
         public HttpClient client;
         public string cacheDir;
         public List<string> cdnList;
+
+        public readonly ConcurrentDictionary<string, ulong> m_allUrls = new ConcurrentDictionary<string, ulong>();
 
         public async Task<uint> GetRemoteFileSize(string path)
         {
@@ -26,23 +29,22 @@ namespace BuildBackup
 
                 try
                 {
-                    using (var response = await client.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead))
+                    var requestMessage = new HttpRequestMessage(HttpMethod.Head, uri);
+                    using var response = await client.SendAsync(requestMessage, HttpCompletionOption.ResponseHeadersRead);
+                    if (response.IsSuccessStatusCode)
                     {
-                        if (response.IsSuccessStatusCode)
-                        {
-                            found = true;
+                        found = true;
 
-                            if (response.Content.Headers.ContentLength != null)
-                                return (uint) response.Content.Headers.ContentLength;
-                        }
-                        else if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
-                        {
-                            Logger.WriteLine("File not found on CDN " + cdn + " trying next CDN (if available)..");
-                        }
-                        else
-                        {
-                            throw new FileNotFoundException("Error retrieving file: HTTP status code " + response.StatusCode + " on URL " + uri.AbsoluteUri);
-                        }
+                        if (response.Content.Headers.ContentLength != null)
+                            return (uint) response.Content.Headers.ContentLength;
+                    }
+                    else if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+                    {
+                        Logger.WriteLine("File not found on CDN " + cdn + " trying next CDN (if available)..");
+                    }
+                    else
+                    {
+                        throw new FileNotFoundException("Error retrieving file: HTTP status code " + response.StatusCode + " on URL " + uri.AbsoluteUri);
                     }
                 }
                 catch (Exception e)
@@ -60,8 +62,33 @@ namespace BuildBackup
 
         public async Task<byte[]> Get(string path, bool returnstream = true, bool redownload = false, uint expectedSize = 0, bool verbose = false)
         {
+            if (path.Contains("//"))
+            {
+                throw new Exception("double slash");
+            }
+            
             path = path.ToLower();
             var localPath = Path.Combine(cacheDir, path);
+
+            var foundHead = false;
+            foreach (var cdn in cdnList)
+            {
+                var uri = new Uri("http://" + cdn + "/" + path);
+
+                var requestMessage = new HttpRequestMessage(HttpMethod.Head, uri);
+
+                using var response = await client.SendAsync(requestMessage, HttpCompletionOption.ResponseHeadersRead);
+
+                if (response.IsSuccessStatusCode)
+                {
+                    m_allUrls.TryAdd(uri.ToString(), (ulong) response.Content.Headers.ContentLength);
+                    foundHead = true;
+                    break;
+                }
+            }
+            if (!foundHead) throw new Exception();
+            
+            if (!returnstream) return null;
 
             if (File.Exists(localPath) && expectedSize != 0)
             {
